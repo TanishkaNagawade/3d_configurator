@@ -4,9 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ENGINEERING CONFIGURATOR PAGE DESIGNER</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link href="vendor/fonts/fonts.css" rel="stylesheet">
 <style>
 :root{
   --bg:#0a0e14; --panel:#0f151e; --panel2:#131b26; --panel3:#182231;
@@ -420,7 +418,7 @@ input[type=checkbox]{accent-color:var(--cyan);width:13px;height:13px;cursor:poin
 <div id="drag"></div>
 <input type="file" id="fileIn" style="display:none">
 <script type="importmap">
-{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}
+{"imports":{"three":"./vendor/three/build/three.module.js","three/addons/":"./vendor/three/examples/jsm/"}}
 </script>
 <script type="module">
 import * as THREE from 'three';
@@ -3884,7 +3882,7 @@ function registerImported(obj,name){
 }
 function loadGLTF(file,buf){
   const l=new GLTFLoader();
-  try{ const draco=new DRACOLoader(); draco.setDecoderPath('https://unpkg.com/three@0.160.0/examples/jsm/libs/draco/'); l.setDRACOLoader(draco); }catch(e){}
+  try{ const draco=new DRACOLoader(); draco.setDecoderPath('./vendor/three/examples/jsm/libs/draco/'); l.setDRACOLoader(draco); }catch(e){}
   l.parse(buf,'',g=>registerImported(g.scene,file.name),e=>log('GLTF parse failed: '+e.message,'e'));
 }
 function loadOBJ(file,text){
@@ -4009,19 +4007,43 @@ function exportProjectData(opt){
   if(!opt.ui) d.pages=[];
   return d;
 }
-function doExportConfigurator(opt){
+function toB64(str){
+  const bytes=new TextEncoder().encode(str); let s='';
+  for(let i=0;i<bytes.length;i++) s+=String.fromCharCode(bytes[i]);
+  return btoa(s);
+}
+async function vendorBundle(){
+  const files={
+    three:'vendor/three/build/three.module.js',
+    orbit:'vendor/three/examples/jsm/controls/OrbitControls.js',
+    fonts:'vendor/fonts/fonts.css'
+  };
+  const r={};
+  for(const k in files){
+    try{ r[k]=await (await fetch(files[k])).text(); if(!r[k]) return null; }catch(e){ return null; }
+  }
+  return r;
+}
+async function doExportConfigurator(opt){
   status('Building configurator…',true);
   const data=exportProjectData(opt);
   if(!data.pages.length) data.pages=[defaultPage()];
   const runtime=buildRuntimeSource();
   const cfgInline=opt.format==='html';
+  const bundle=await vendorBundle();
+  if(!bundle) log('Vendor assets not reachable — the exported file will reference ./vendor/ relatively','w');
+  const importmap=bundle
+    ?'{"imports":{"three":"data:text/javascript;base64,'+toB64(bundle.three)+'","three/addons/controls/OrbitControls.js":"data:text/javascript;base64,'+toB64(bundle.orbit)+'"}}'
+    :'{"imports":{"three":"./vendor/three/build/three.module.js","three/addons/":"./vendor/three/examples/jsm/"}}';
+  const fontTag=bundle?'<style>'+bundle.fonts.replace(/<\/style/g,'<\\/style')+'</style>'
+    :'<link href="vendor/fonts/fonts.css" rel="stylesheet">';
   const html=`<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(P.meta.name)} — interactive configurator</title>
-<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+${fontTag}
 <style>${EXPORT_CSS}</style>
-<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}<\/script>
+<script type="importmap">${importmap}<\/script>
 </head><body>
 <div id="loading"><div class="ldr"></div><div class="ltxt">LOADING CONFIGURATOR</div></div>
 <div id="stageWrap"><div id="pdStage"></div></div>
