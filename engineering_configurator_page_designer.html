@@ -97,6 +97,12 @@ button,input,select,textarea{font-family:inherit;font-size:inherit;color:inherit
 /* ============ VIEWPORT ============ */
 #vpwrap{flex:1;position:relative;min-height:0;background:#05080c;overflow:hidden}
 #vp{position:absolute;inset:0}
+#vp canvas.gl-fallback{position:absolute;inset:0;width:100%;height:100%;pointer-events:auto}
+#vp .gl-err{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:6;
+  display:flex;flex-direction:column;gap:6px;max-width:380px;padding:14px 18px;text-align:center;
+  background:rgba(15,21,30,.92);border:1px solid var(--line2);color:var(--txt)}
+#vp .gl-err b{font-family:var(--f-mono);font-size:12px;letter-spacing:2px;color:var(--amber)}
+#vp .gl-err span{font-size:12px;color:var(--dim);line-height:1.5}
 #vp canvas{display:block;width:100%;height:100%}
 #labels{position:absolute;inset:0;pointer-events:none;overflow:hidden}
 .vp-ovl{position:absolute;pointer-events:none;font-family:var(--f-mono);font-size:10px;color:#7d93aa;letter-spacing:.5px}
@@ -420,6 +426,20 @@ input[type=checkbox]{accent-color:var(--cyan);width:13px;height:13px;cursor:poin
 <script type="importmap">
 {"imports":{"three":"./vendor/three/build/three.module.js","three/addons/":"./vendor/three/examples/jsm/"}}
 </script>
+<script>
+/* Startup watchdog: if the ES module below fails to boot (e.g. opened via file:// where
+   module scripts are blocked, or a fatal init error), explain instead of showing a dead page. */
+setTimeout(function(){ if(!window.__ECPD_OK){
+  const d=document.createElement('div');
+  d.style.cssText='position:fixed;top:130px;left:50%;transform:translateX(-50%);z-index:99;'+
+    'max-width:420px;padding:14px 18px;background:rgba(15,21,30,.95);border:1px solid #26364a;'+
+    'color:#f59e0b;font:600 11px Rajdhani,sans-serif;letter-spacing:1px;text-align:center;line-height:1.7';
+  d.innerHTML='<b>ECPD FAILED TO START</b><br><span style="color:#6b7f96;font-weight:500">'+
+    'If you opened this file directly (file://), serve the folder over HTTP instead,<br>'+
+    'e.g. <span style="font-family:monospace">python3 -m http.server</span> — browser ES modules cannot load from disk.</span>';
+  document.body.appendChild(d);
+}},3000);
+</script>
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -632,6 +652,11 @@ function buildEnvScene(key){
   return sc;
 }
 function applyEnvironment(key){
+  if(rendererFallback){
+    const bcfg=ENVS[key]||ENVS.studio;
+    if(backdrop){ backdrop.material.uniforms.cTop.value.set(bcfg.sky[0]); backdrop.material.uniforms.cBot.value.set(bcfg.sky[1]); }
+    return;
+  }
   if(!pmrem) pmrem=new THREE.PMREMGenerator(renderer);
   if(envRT) envRT.dispose();
   const es=buildEnvScene(key);
@@ -647,9 +672,27 @@ function applyEnvironment(key){
 }
 
 /* ---------- init ---------- */
+let rendererFallback=false;
+function makeRenderer(opts){
+  try{ return new THREE.WebGLRenderer(opts); }
+  catch(e){
+    rendererFallback=true;
+    log('WebGL unavailable: '+(e&&e.message||e)+' — 3D rendering disabled, editor UI remains usable','e');
+    const cv=document.createElement('canvas'); cv.className='gl-fallback';
+    return {domElement:cv,pixelRatio:1,toneMapping:0,outputColorSpace:'',
+      shadowMap:{enabled:false,type:0},localClippingEnabled:false,clippingPlanes:[],
+      setPixelRatio(){},getPixelRatio(){return 1;},setSize(){},setClearColor(){},
+      setRenderTarget(){},clear(){},render(){},dispose(){},compile(){},readRenderTargetPixels(){}};
+  }
+}
 function initViewport(){
   const host=$('#vp');
-  renderer=new THREE.WebGLRenderer({antialias:false,powerPreference:'high-performance',stencil:false,preserveDrawingBuffer:true});
+  renderer=makeRenderer({antialias:false,powerPreference:'high-performance',stencil:false,preserveDrawingBuffer:true});
+  if(rendererFallback){
+    host.insertAdjacentHTML('beforeend','<div class="gl-err"><b>WEBGL UNAVAILABLE</b>'
+      +'<span>This browser or system could not create a WebGL context, so the 3D viewport is disabled.</span>'
+      +'<span>Enable hardware acceleration (or use a current Chrome / Edge / Firefox) and reload.</span></div>');
+  }
   pixelRatio=Math.min(devicePixelRatio||1,2);
   renderer.setPixelRatio(pixelRatio);
   renderer.toneMapping=THREE.NoToneMapping;          // tone mapping happens in final pass
@@ -1341,7 +1384,7 @@ function faceTex(txt,accent){
 }
 function initViewCube(){
   const host=$('#viewcube');
-  cubeRenderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+  cubeRenderer=makeRenderer({antialias:true,alpha:true});
   cubeRenderer.setPixelRatio(Math.min(devicePixelRatio,2)); cubeRenderer.setSize(96,96);
   host.appendChild(cubeRenderer.domElement);
   cubeScene=new THREE.Scene();
@@ -4563,6 +4606,7 @@ function main(){
   log('Tip: press P for the page designer, Space to play the timeline, E to explode','i');
   animate();
   setInterval(()=>{ if(P.settings.autosave){ try{ localStorage.setItem('ecpd_autosave',JSON.stringify(serializeProject())); }catch(e){} } },45000);
+  window.__ECPD_OK=true;
 }
 main();
 
