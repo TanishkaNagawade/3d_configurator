@@ -3261,7 +3261,8 @@ function menuData(){
     File:[{l:'New project',k:'Ctrl+N',a:newProjectDialog},{l:'Open project…',k:'Ctrl+O',a:openProjectFile},
       {l:'Save',k:'Ctrl+S',a:saveProject},{l:'Save as…',a:()=>promptModal('Save as',P.meta.name,v=>{P.meta.name=v; saveProject();})},'-',
       {l:'Import 3D (GLB/GLTF/OBJ/STL)',a:importModelDialog},{l:'Import assembly folder',a:()=>toast('Import each mesh file individually')},
-      {l:'Import STEP',a:()=>stepNotice()},'-',
+      {l:'Import STEP',a:()=>stepNotice()},
+      {l:'Import Creo assembly (ZIP)…',a:creoImportDialog},{l:'Creo demo motor',a:creoDemoAssembly},'-',
       {l:'Export project JSON',a:()=>dl('project.ecpd.json',new Blob([JSON.stringify(P,null,1)],{type:'application/json'}))},
       {l:'Export GLB',a:exportGLB},{l:'Export configurator…',a:exportConfiguratorDialog},'-',
       {l:'Project settings',a:()=>{S.activePane.R='props'; S.sel=[]; buildDocks();}}],
@@ -3902,9 +3903,137 @@ function importModelDialog(){
     {l:'Import OBJ',i:'imp',a:()=>{ closeModal(); importFile('.obj',(file,data)=>loadOBJ(file,data),'text'); }},
     {l:'Import STL',i:'imp',a:()=>{ closeModal(); importFile('.stl',(file,data)=>loadSTL(file,data),'arraybuffer'); }},
     {l:'STEP / IGES',i:'file',a:()=>{ closeModal(); stepNotice(); }},
+    {l:'Creo assembly (ZIP)',i:'imp',a:()=>{ closeModal(); creoImportDialog(); }},
   ]);
   b.appendChild(f.el);
   openModal('Import 3D',b,[{l:'Close',a:closeModal}]);
+}
+/* ============================================================
+   CREO INTEGRATION (server-side conversion pipeline)
+   ZIP upload -> FastAPI backend -> GLB + canonical metadata -> occurrence
+   tree. The backend runs the licensed Creo Object TOOLKIT Java bridge; this
+   client never claims to parse .prt/.asm files itself.
+   ============================================================ */
+function creoBackendUrl(){ return localStorage.getItem('ecpd_creo_backend')||'http://localhost:8000'; }
+function creoImportDialog(){
+  const b=el('div'); const f=F();
+  const st=el('div','hint','Idle.');
+  st.style.marginTop='8px';
+  f.head('CREO ASSEMBLY IMPORT');
+  f.note('Uploads a ZIP of the exported Creo folder (.asm/.prt, any version suffixes) to the local conversion backend. '+
+    'The backend validates the archive, finds the root assembly, runs the Creo Object TOOLKIT Java bridge, '+
+    'and returns GLB + canonical metadata. Nothing is parsed client-side.');
+  f.text('Backend URL',creoBackendUrl(),v=>localStorage.setItem('ecpd_creo_backend',v||''));
+  let rootAsm=localStorage.getItem('ecpd_creo_root')||'';
+  f.text('Root assembly (optional)',rootAsm,v=>{ rootAsm=v; localStorage.setItem('ecpd_creo_root',v); },'motor.asm');
+  f.btns([
+    {l:'Choose ZIP…',i:'imp',cls:'pri',a:()=>importFile('.zip',(file,data)=>{
+      creoUpload(file,st,f);
+    },'arraybuffer')},
+    {l:'Demo motor (no Creo needed)',i:'gear',a:()=>{ closeModal(); creoDemoAssembly(); }},
+    {l:'Close',a:closeModal},
+  ]);
+  b.appendChild(f.el); b.appendChild(st);
+  openModal('Creo assembly import',b);
+}
+async function creoUpload(file,st,f){
+  const base=creoBackendUrl().replace(/\/+$/,'');
+  const rootAsm=(localStorage.getItem('ecpd_creo_root')||'').trim();
+  const say=m=>{ st.innerHTML='<div class="hint" style="line-height:1.6">'+esc(m)+'</div>'; log('Creo: '+m); };
+  say('Uploading '+esc(file.name)+' to '+esc(base)+' …');
+  const fd=new FormData(); fd.append('upload',file,file.name);
+  if(rootAsm) fd.append('rootAssembly',rootAsm);
+  let job;
+  try{ const r=await fetch(base+'/api/jobs',{method:'POST',body:fd}); job=await r.json(); }
+  catch(e){ say('<b>Backend unreachable.</b> Start it with <code>uvicorn server.app.main:app</code> '+
+    'on the machine with licensed Creo (docs/creo-setup.md). ('+esc(e.message)+')'); return; }
+  if(!job.jobId){ say('Unexpected response: '+esc(JSON.stringify(job))); return; }
+  for(let i=0;i<300;i++){
+    await new Promise(r=>setTimeout(r,800));
+    let s; try{ s=await(await fetch(base+'/api/jobs/'+job.jobId)).json(); }catch(e){ continue; }
+    if(s.status==='failed'){ say('<b>Conversion failed</b> ['+esc(s.error?.code||'ERR')+'] '+
+      esc(s.error?.message||'')+(s.error?.details?.candidates?' · candidates: '+s.error.details.candidates.map(esc).join(', '):'')); return; }
+    if(s.status==='done') break;
+    say('Converting… '+esc(s.stage||'')+' '+String(s.progress||0)+'%');
+  }
+  say('Fetching artifacts…');
+  const glb=await(await fetch(base+'/api/jobs/'+job.jobId+'/artifacts/glb')).arrayBuffer();
+  const meta=await(await fetch(base+'/api/jobs/'+job.jobId+'/artifacts/metadata')).json();
+  const l=new GLTFLoader();
+  l.parse(glb,'',g=>{
+    const n=registerCreoAssembly(g.scene,meta,file.name);
+    say('Loaded '+n+' occurrences from '+esc(meta.name||file.name)+'.');
+    closeModal();
+  },e=>say('GLB parse failed: '+esc(e.message||e)));
+}
+function registerCreoAssembly(obj,meta,srcName){
+  /* Occurrence tree: one part per GLB scene node with occurrenceId extras. */
+  const found=[];
+  obj.traverse(o=>{ if(o.userData&&o.userData.occurrenceId) found.push(o); });
+  found.forEach(o=>{
+    const ud=o.userData, occ=ud.occurrenceId;
+    o.traverse(m=>{ if(m.isMesh){ m.userData.partId=occ; m.castShadow=m.receiveShadow=true;
+      m.userData.baseMat={transparent:false,opacity:1}; }});
+    o.userData.rest={p:o.position.clone(),q:o.quaternion.clone()};
+    root.add(o);
+    PARTOBJ.set(occ,o);
+    P.parts[occ]={id:occ,name:ud.partNumber||ud.description||occ,partNo:ud.partNumber||'CREO',
+      material:'steel',visible:true,mass:0,parent:'assembly',
+      explode:{dir:[0,1,0],dist:150,order:1}};
+    P.imported.push({id:occ,name:occ,format:'creo'});
+    IMPORTED_OBJ.set(occ,o);
+  });
+  /* M7: exploded states + mechanism->joint mapping (flagged for review). */
+  (meta.explodedStates||[]).forEach(s=>{
+    (s.offsets||[]).forEach(off=>{
+      const p=P.parts[off.occurrenceId]; if(!p||!off.direction) return;
+      p.explode={dir:off.direction,dist:off.distance??150,order:off.order??1};
+    });
+    if(s.offsets?.length) log('Creo exploded state "'+(s.name||'unnamed')+'" applied to '+s.offsets.length+' occurrences','i');
+  });
+  (meta.mechanisms||[]).forEach(mech=>{
+    (mech.members||[]).forEach((child,i)=>{
+      if(i===0||!P.parts[child]) return;
+      P.joints.push({id:uid('j'),name:(mech.kind||'joint')+' · '+(P.parts[child].name||child),
+        parent:mech.members[0],child:child,kind:mech.kind==='prismatic'?'slider':'revolute',
+        axis:mech.axis||[1,0,0],limits:mech.limits||null,confidence:mech.confidence??0,
+        requiresReview:mech.requiresReview!==false});
+    });
+    log('Creo mechanism "'+(mech.kind||'?')+'" → '+(mech.members?.length||0)+' member(s)'+
+      (mech.requiresReview?' (review required — imported with source/confidence flags)':''),'w');
+  });
+  P.assemblyMeta=meta;
+  modelBounds.setFromObject(root); updateStats(); snapshot('creo import'); refreshAllPanels(); fitAll();
+  const mats={}; Object.values(meta.definitions||{}).forEach(d=>(d.materials||[]).forEach(m=>mats[m.name]=1));
+  log('Creo import: '+found.length+' occurrences, materials: '+Object.keys(mats).join(', '),'ok');
+  toast('Creo assembly loaded: '+found.length+' parts');
+  return found.length;
+}
+function creoDemoAssembly(){
+  /* Client-side synthetic motor through the same registration path (M8).
+     No claims of parsing native Creo data — geometry is procedural. */
+  const grp=new THREE.Group();
+  const defs=[
+    {occ:'MOTOR/housing:1',name:'HOUSING',pn:'MOCK-HOUSING',mat:'steel',r:70,l:170,x:0},
+    {occ:'MOTOR/stator:1',name:'STATOR',pn:'MOCK-STATOR',mat:'copper',r:58,l:110,x:0},
+    {occ:'MOTOR/rotor:1',name:'ROTOR',pn:'MOCK-ROTOR',mat:'steel',r:30,l:100,x:0},
+    {occ:'MOTOR/shaft:1',name:'SHAFT',pn:'MOCK-SHAFT',mat:'steel',r:12,l:230,x:0},
+    {occ:'MOTOR/front_bearing:1',name:'FRONT BEARING',pn:'MOCK-BRGF',mat:'steel',r:22,l:18,x:85},
+    {occ:'MOTOR/rear_bearing:1',name:'REAR BEARING',pn:'MOCK-BRGR',mat:'steel',r:22,l:18,x:-85},
+    {occ:'MOTOR/fan:1',name:'FAN',pn:'MOCK-FAN',mat:'copper',r:55,l:10,x:115},
+    {occ:'MOTOR/cover:1',name:'COVER',pn:'MOCK-COVER',mat:'steel',r:68,l:8,x:-95},
+  ];
+  const meta={name:'Demo Motor',source:'Creo demo (procedural)',definitions:{},occurrences:{}};
+  defs.forEach(d=>{
+    meta.definitions[d.pn+'.PRT']={materials:[{name:d.mat==='copper'?'COPPER':'MILD STEEL'}]};
+    const g=new THREE.CylinderGeometry(d.r,d.r,d.l,24); g.rotateZ(Math.PI/2);
+    const mesh=new THREE.Mesh(g,getMaterial(d.mat));
+    mesh.position.x=d.x;
+    mesh.userData={occurrenceId:d.occ,partNumber:d.pn,description:d.name};
+    grp.add(mesh);
+  });
+  registerCreoAssembly(grp,meta,'demo-motor');
+  log('Demo motor loaded (procedural stand-in for Creo-converted geometry)','i');
 }
 function registerImported(obj,name){
   const id=uid('imp');

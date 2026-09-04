@@ -1,0 +1,19 @@
+{
+  "aliases": {
+    "mild steel": {"class": "steel", "density": 7.85e-6, "baseColor": [0.75, 0.77, 0.80]},
+    "carbon steel": {"class": "steel", "density": 7.85e-6, "baseColor": [0.72, 0.74, 0.78]},
+    "stainless steel": {"class": "steel", "density": 7.9e-6, "baseColor": [0.78, 0.80, 0.82]},
+    "cast iron": {"class": "iron", "density": 7.2e-6, "baseColor": [0.62, 0.62, 0.65]},
+    "copper": {"class": "copper", "density": 8.96e-6, "baseColor": [0.76, 0.46, 0.20]},
+    "brass": {"class": "brass", "density": 8.5e-6, "baseColor": [0.87, 0.66, 0.31]},
+    "aluminum": {"class": "aluminum", "density": 2.7e-6, "baseColor": [0.85, 0.86, 0.89]},
+    "aluminium": {"class": "aluminum", "density": 2.7e-6, "baseColor": [0.85, 0.86, 0.89]},
+    "aluminium alloy": {"class": "aluminum", "density": 2.8e-6, "baseColor": [0.83, 0.84, 0.87]}
+  },
+  "fallback": {
+    "class": "generic",
+    "density": null,
+    "baseColor": [0.62, 0.64, 0.66],
+    "comment": "Unknown materials are never silently classified as steel — §7.3"
+  }
+}
