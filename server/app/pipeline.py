@@ -13,8 +13,17 @@ from .jobs import STORE, JOB_ROOT
 from .materials import resolve_material, UnknownMaterial
 from .schemas import validate_project, structural_check
 from .zipsafe import secure_extract, ZipError, ALLOWED_EXTENSIONS
-from ..conversion.glbbuilder import build_glb
-from ..conversion.validate import validate_glb
+
+try:
+    from ..conversion.glbbuilder import build_glb
+    from ..conversion.validate import validate_glb
+except ImportError:  # direct uvicorn run from server/ (no package context)
+    import sys
+    _repo = Path(__file__).resolve().parents[2]
+    if str(_repo) not in sys.path:
+        sys.path.insert(0, str(_repo))
+    from server.conversion.glbbuilder import build_glb
+    from server.conversion.validate import validate_glb
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 

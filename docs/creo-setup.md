@@ -36,10 +36,18 @@ piece exits non-zero with a structured error (`CREO_NOT_INSTALLED`,
 
 ## 2. Backend
 
+**Run from the repository root** (the package layout needs it):
+
 ```bash
-cd server && pip install -r requirements.txt
-python3 -m uvicorn server.app.main:app --host 127.0.0.1 --port 8000   # from repo root
+cd C:\Users\...\GitHub\3d_configurator      # repo root — NOT the server\ folder
+pip install -r server\requirements.txt      # (server/requirements.txt on macOS/Linux)
+python3 -m uvicorn server.app.main:app --host 127.0.0.1 --port 8000
 ```
+
+Do not `cd server` and run `uvicorn app.main:app` — the app imports sibling
+packages (`server.conversion.*`) relative to the repo root, so starting from
+inside `server\` raises `ImportError: attempted relative import beyond
+top-level package`.
 
 The backend shells `java -jar creo-bridge/build/creo-bridge.jar extract <zipDir> <outDir>`.
 Without a licensed Creo/JDK it falls back to the deterministic **mock sample**
